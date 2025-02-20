@@ -20,9 +20,12 @@ PubSubClient client(espClient);
 Adafruit_MPU6050 mpu;
 
 // Definição dos pinos
-#define ALARM_LED_PIN    15  // LED que indica alarme
-#define POSITION_LED_PIN 16  // LED indicador de posição válida
-#define BUZZER_PIN       17  // Buzzer para alarme
+#define ALARM_LED_PIN 26  // LED que indica alarme
+#define BUZZER_PIN    14  // Buzzer para alarme
+
+// Definindo os pinos I2C para o MPU6050: D35 para SDA e D34 para SCL
+#define I2C_SDA 35
+#define I2C_SCL 34
 
 // Tempo para disparo do alarme: 2 horas em milissegundos
 const unsigned long alarmDuration = 7200000;
@@ -30,9 +33,8 @@ const unsigned long alarmDuration = 7200000;
 // Variáveis para controle da posição
 unsigned long positionStartTime = 0;
 String currentPosition = "indefinido";
-float ax_ref, ay_ref, az_ref; // Armazena os valores iniciais da posição do braço
-bool calibrado = false; // Indica se a calibração já foi feita
-
+float ax_ref, ay_ref, az_ref; // Valores iniciais da posição do braço
+bool calibrado = false;       // Indica se a calibração foi feita
 
 // Função para detectar a posição do paciente com base na aceleração
 // OBS.: Os eixos e limiares abaixo podem precisar de ajustes conforme a fixação do sensor no braço.
@@ -56,17 +58,12 @@ String detectPosition(float ax, float ay, float az) {
   }
 }
 
-
 // Função para reconectar ao broker MQTT, se necessário
 void reconnect() {
-  // Loop até reconectar
   while (!client.connected()) {
     Serial.print("Conectando ao MQTT...");
-    // Cria um ID único para o cliente
     String clientId = "ESP32_Braco-";
     clientId += String(random(0xffff), HEX);
-    
-    // Tenta conectar (sem usuário/senha; adicione se necessário)
     if (client.connect(clientId.c_str())) {
       Serial.println(" conectado!");
     } else {
@@ -82,8 +79,10 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // Inicializa MPU6050
-  Wire.begin();
+  // Inicializa a comunicação I2C nos pinos definidos (D35 e D34)
+  Wire.begin(I2C_SDA, I2C_SCL);
+  
+  // Inicializa o MPU6050
   if (!mpu.begin()) {
     Serial.println("Falha ao inicializar o MPU6050!");
     while (1) delay(10);
@@ -102,8 +101,29 @@ void setup() {
   
   Serial.println("Calibração concluída! Posição inicial registrada.");
   calibrado = true;
-}
 
+  // Configuração dos pinos de saída
+  pinMode(ALARM_LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  // Conecta à rede WiFi
+  Serial.print("Conectando à rede WiFi: ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("Conectado! IP: ");
+  Serial.println(WiFi.localIP());
+
+  // Configura o servidor MQTT
+  client.setServer(mqtt_server, 1883);
+
+  // Inicializa a contagem de tempo na posição
+  positionStartTime = millis();
+}
 
 void loop() {
   // Garante que estamos conectados ao MQTT
@@ -116,7 +136,7 @@ void loop() {
   sensors_event_t accel, gyro, temp;
   mpu.getEvent(&accel, &gyro, &temp);
 
-  // Obtem os valores do acelerômetro
+  // Obtém os valores do acelerômetro
   float ax = accel.acceleration.x;
   float ay = accel.acceleration.y;
   float az = accel.acceleration.z;
@@ -154,13 +174,10 @@ void loop() {
       digitalWrite(ALARM_LED_PIN, LOW);
       digitalWrite(BUZZER_PIN, LOW);
     }
-    // Liga o LED de posição quando uma posição definida é detectada
-    digitalWrite(POSITION_LED_PIN, HIGH);
   } else {
-    // Se posição indefinida, desliga alarmes e indicador de posição
+    // Se posição indefinida, desliga os alarmes
     digitalWrite(ALARM_LED_PIN, LOW);
     digitalWrite(BUZZER_PIN, LOW);
-    digitalWrite(POSITION_LED_PIN, LOW);
   }
 
   // Monta a mensagem JSON com os dados a serem enviados

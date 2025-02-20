@@ -19,10 +19,13 @@ PubSubClient client(espClient);
 // Inicializa o sensor MPU6050
 Adafruit_MPU6050 mpu;
 
-// Definição dos pinos
-#define ALARM_LED_PIN    15  // LED que indica alarme
-#define POSITION_LED_PIN 16  // LED indicador de posição válida
-#define BUZZER_PIN       17  // Buzzer para alarme
+// Definição dos pinos para o alarme
+#define ALARM_LED_PIN 26  // LED que indica alarme
+#define BUZZER_PIN    14  // Buzzer para alarme
+
+// Definindo os pinos I2C para o MPU6050: D35 para SDA e D34 para SCL
+#define I2C_SDA 35
+#define I2C_SCL 34
 
 // Tempo para disparo do alarme: 2 horas em milissegundos
 const unsigned long alarmDuration = 7200000;
@@ -31,19 +34,16 @@ const unsigned long alarmDuration = 7200000;
 unsigned long positionStartTime = 0;
 String currentPosition = "indefinido";
 
-// Variáveis de calibração da posição inicial
-float ax_ref, ay_ref, az_ref; 
-bool calibrado = false; 
+// Variáveis para calibração da posição inicial
+float ax_ref, ay_ref, az_ref;
+bool calibrado = false;
 
 // Função para detectar a posição do paciente com base na aceleração
 String detectPosition(float ax, float ay, float az) {
-  if (!calibrado) return "indefinido"; // Evita detecção antes da calibração
-
-  // Cálculo de variação em relação à posição inicial
   float dx = ax - ax_ref;
   float dy = ay - ay_ref;
   float dz = az - az_ref;
-
+  
   float threshold = 3.0; // Sensibilidade ajustável
 
   if (dx > threshold) {
@@ -80,17 +80,21 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
+  // Configura os pinos de saída
   pinMode(ALARM_LED_PIN, OUTPUT);
-  pinMode(POSITION_LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
-  Wire.begin();
+  // Inicializa a comunicação I2C nos pinos definidos (D35 e D34)
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  // Inicializa o MPU6050
   if (!mpu.begin()) {
     Serial.println("Falha ao inicializar o MPU6050!");
     while (1) delay(10);
   }
 
-  Serial.println("Posicione a perna corretamente (estendida e relaxada). Calibração em 3 segundos...");
+  // Calibração inicial: oriente o paciente a posicionar a perna corretamente (esticada e relaxada)
+  Serial.println("Posicione a perna corretamente (esticada e relaxada). Calibração em 3 segundos...");
   delay(3000);
 
   sensors_event_t accel, gyro, temp;
@@ -98,10 +102,11 @@ void setup() {
   ax_ref = accel.acceleration.x;
   ay_ref = accel.acceleration.y;
   az_ref = accel.acceleration.z;
-
+  
   Serial.println("Calibração concluída! Posição inicial registrada.");
   calibrado = true;
 
+  // Conecta à rede WiFi
   Serial.print("Conectando à rede WiFi: ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
@@ -113,68 +118,34 @@ void setup() {
   Serial.print("Conectado! IP: ");
   Serial.println(WiFi.localIP());
 
+  // Configura o servidor MQTT
   client.setServer(mqtt_server, 1883);
 
+  // Inicializa a contagem de tempo na posição
   positionStartTime = millis();
 }
 
 void loop() {
+  // Garante que estamos conectados ao MQTT
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
 
+  // Leitura dos sensores do MPU6050
   sensors_event_t accel, gyro, temp;
   mpu.getEvent(&accel, &gyro, &temp);
 
+  // Obtém os valores do acelerômetro
   float ax = accel.acceleration.x;
   float ay = accel.acceleration.y;
   float az = accel.acceleration.z;
 
+  // Detecta a posição atual com base nos valores do acelerômetro
   String newPosition = detectPosition(ax, ay, az);
 
+  // Se a posição detectada mudar, reinicia a contagem de tempo
   if (newPosition != currentPosition) {
     currentPosition = newPosition;
     positionStartTime = millis();
-    digitalWrite(ALARM_LED_PIN, LOW);
-    digitalWrite(BUZZER_PIN, LOW);
-    Serial.print("Posição alterada: ");
-    Serial.println(currentPosition);
-  }
-
-  unsigned long timeInPosition = millis() - positionStartTime;
-
-  if (currentPosition != "indefinido") {
-    Serial.print("Tempo na posição ");
-    Serial.print(currentPosition);
-    Serial.print(": ");
-    Serial.print(timeInPosition / 1000);
-    Serial.println(" s");
-
-    if (timeInPosition >= alarmDuration) {
-      digitalWrite(ALARM_LED_PIN, HIGH);
-      digitalWrite(BUZZER_PIN, HIGH);
-      Serial.println("ALERTA: Posição prolongada detectada!");
-    } else {
-      digitalWrite(ALARM_LED_PIN, LOW);
-      digitalWrite(BUZZER_PIN, LOW);
-    }
-    digitalWrite(POSITION_LED_PIN, HIGH);
-  } else {
-    digitalWrite(ALARM_LED_PIN, LOW);
-    digitalWrite(BUZZER_PIN, LOW);
-    digitalWrite(POSITION_LED_PIN, LOW);
-  }
-
-  String payload = "{";
-  payload += "\"position\":\"" + currentPosition + "\",";
-  payload += "\"time_in_position\":" + String(timeInPosition / 1000) + ",";
-  payload += "\"ax\":" + String(ax, 2) + ",";
-  payload += "\"ay\":" + String(ay, 2) + ",";
-  payload += "\"az\":" + String(az, 2);
-  payload += "}";
-
-  client.publish(MQTT_TOPIC, payload.c_str());
-
-  delay(1000);
-}
+    // Desliga o alarme imediatamente ao mudar a posiç
