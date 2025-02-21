@@ -24,8 +24,8 @@ Adafruit_MPU6050 mpu;
 #define BUZZER_PIN    14  // Buzzer para alarme
 
 // Definindo os pinos I2C para o MPU6050: D35 para SDA e D34 para SCL
-#define I2C_SDA 35
-#define I2C_SCL 34
+#define I2C_SDA 33
+#define I2C_SCL 32
 
 // Tempo para disparo do alarme: 2 horas em milissegundos
 const unsigned long alarmDuration = 7200000;
