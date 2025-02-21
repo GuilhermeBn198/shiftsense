@@ -33,7 +33,7 @@ Adafruit_MPU6050 mpu;
 #define I2C_SCL 32
 
 // Tempo para disparo do alarme: 20 segundos para testes (substitua por 7200000 para 2 horas)
-const unsigned long alarmDuration = 20000;
+const unsigned long alarmDuration = 7200000;
 
 // Intervalo de piscagem para LED e buzzer (em milissegundos)
 const unsigned long blinkInterval = 500;
@@ -50,15 +50,15 @@ bool blinkState = false;
 // utilizando os parâmetros fixos de referência.
 String detectPosition(float ax, float ay, float az) {
   // Define a tolerância (ajuste conforme necessário)
-  float tol = 3.0;
+  float tol = 2.0;
   
   // Calcula a distância Euclidiana entre a leitura atual e cada referência:
-  float dPraCima    = sqrt(pow(ax - 10.0, 2) + pow(ay - 0.0, 2) + pow(az - 0.0, 2));
-  float dPraDireita = sqrt(pow(ax - (-1.0), 2) + pow(ay - 0.0, 2) + pow(az - 10.0, 2));
-  float dPraEsquerda= sqrt(pow(ax - 3.0, 2) + pow(ay - (-9.0), 2) + pow(az - 1.0, 2));
-  float dPraBaixo   = sqrt(pow(ax - (-10.0), 2) + pow(ay - 0.0, 2) + pow(az - 0.0, 2));
-  float dSentado    = sqrt(pow(ax - 8.0, 2) + pow(ay - (-5.0), 2) + pow(az - 2.0, 2));
-
+  float dPraCima    = sqrt(pow(ax - 10.0, 2) + pow(ay - (-0.3), 2) + pow(az - (-0.5), 2));
+  float dPraBaixo   = sqrt(pow(ax - (-9.5), 2) + pow(ay - (-0.4), 2) + pow(az - 1.5, 2));
+  float dPraEsquerda= sqrt(pow(ax - (-0.5), 2) + pow(ay - (-0.3), 2) + pow(az - (-9.4), 2));
+  float dPraDireita = sqrt(pow(ax - 1.2, 2) + pow(ay - (-0.2), 2) + pow(az - 10.3, 2));
+  /////////////////////////////////////////////////////////////////////////////////////////////////
+  
   // Inicialmente, assume a posição "pra cima"
   float minDist = dPraCima;
   String pos = "pra cima";
@@ -75,18 +75,30 @@ String detectPosition(float ax, float ay, float az) {
     minDist = dPraBaixo;
     pos = "pra baixo";
   }
-  if (dSentado < minDist) {
-    minDist = dSentado;
-    pos = "sentado";
-  }
+  // if (dSentado < minDist) {
+  //   minDist = dSentado;
+  //   pos = "sentado";
+  // }
   
-  // Se a menor distância for maior que a tolerância, retorna "indefinido"
-  if (minDist > tol) {
-    return "indefinido";
-  } else {
-    return pos;
+  // Verifica se há uma posição secundária próxima para detectar diagonais (sem repetir a principal)
+  String posSecundaria = "";
+  if (pos != "pra cima" && fabs(dPraCima - minDist) < tol) posSecundaria = "pra cima";
+  if (pos != "pra direita" && fabs(dPraDireita - minDist) < tol) posSecundaria = "pra direita";
+  if (pos != "pra esquerda" && fabs(dPraEsquerda - minDist) < tol) posSecundaria = "pra esquerda";
+  if (pos != "pra baixo" && fabs(dPraBaixo - minDist) < tol) posSecundaria = "pra baixo";
+  /////////////////////////////////////////////////////////////////////////////////////////////////
+
+  // Retorna a posição primária e, se houver, a secundária. 
+  // Também ordena os nomes para garantir consistência na saída
+  if (!posSecundaria.isEmpty()) {
+    if (pos > posSecundaria) {
+      return posSecundaria + " / " + pos;
+    }
+    return pos + " / " + posSecundaria;
   }
+  return pos;
 }
+
 
 // Função para reconectar ao broker MQTT, se necessário
 void reconnect() {
