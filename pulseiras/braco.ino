@@ -4,7 +4,8 @@
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
-#include <math.h>  // Para sqrt e pow
+#include <math.h>      // Para sqrt e pow
+#include <ArduinoJson.h> // Biblioteca para parse de JSON
 
 // Configurações do WiFi
 const char* ssid = "Starlink_CIT";
@@ -15,7 +16,12 @@ const char* mqtt_server = "07356c1b41e34d65a6152a202151c24d.s1.eu.hivemq.cloud";
 const uint16_t mqtt_port = 8883;
 const char* mqtt_username = "hivemq.webclient.1740079881529";
 const char* mqtt_password = "h45de%Pb.6O8aBQo>JC!";
-#define MQTT_TOPIC "paciente/braco"
+
+// Defina os tópicos:
+// - MQTT_PUBLISH_TOPIC: tópico onde este dispositivo publica seus dados.
+// - MQTT_SUBSCRIBE_TOPIC: tópico do outro dispositivo, onde ele publica seus dados.
+#define MQTT_PUBLISH_TOPIC    "paciente/braco"  // Este dispositivo
+#define MQTT_SUBSCRIBE_TOPIC  "paciente/perna"  // Dispositivo remoto
 
 // Inicializa os objetos WiFi e MQTT
 WiFiClientSecure espClient;
@@ -32,7 +38,7 @@ Adafruit_MPU6050 mpu;
 #define I2C_SDA 33
 #define I2C_SCL 32
 
-// Tempo para disparo do alarme: 20 segundos para testes (substitua por 7200000 para 2 horas)
+// Tempo para disparo do alarme: 7200000 ms = 2 horas (para testes, pode ser 20000 ms)
 const unsigned long alarmDuration = 7200000;
 
 // Intervalo de piscagem para LED e buzzer (em milissegundos)
@@ -46,8 +52,12 @@ String currentPosition = "indefinido";
 unsigned long lastBlinkTime = 0;
 bool blinkState = false;
 
-// Função para detectar a posição do paciente com base nos valores do acelerômetro,
-// utilizando os parâmetros fixos de referência.
+// Variáveis para controle do alarme remoto
+bool remoteAlarmActive = false;
+unsigned long lastRemoteMessageTime = 0;
+const unsigned long remoteTimeout = 3000; // Se não receber mensagem em 3s, desativa alarme remoto
+
+// --- Função para detectar a posição do paciente com base nos valores do acelerômetro ---
 String detectPosition(float ax, float ay, float az) {
   // Define a tolerância (ajuste conforme necessário)
   float tol = 2.0;
@@ -57,7 +67,6 @@ String detectPosition(float ax, float ay, float az) {
   float dPraBaixo   = sqrt(pow(ax - (-9.5), 2) + pow(ay - (-0.4), 2) + pow(az - 1.5, 2));
   float dPraEsquerda= sqrt(pow(ax - (-0.5), 2) + pow(ay - (-0.3), 2) + pow(az - (-9.4), 2));
   float dPraDireita = sqrt(pow(ax - 1.2, 2) + pow(ay - (-0.2), 2) + pow(az - 10.3, 2));
-  /////////////////////////////////////////////////////////////////////////////////////////////////
   
   // Inicialmente, assume a posição "pra cima"
   float minDist = dPraCima;
@@ -75,10 +84,6 @@ String detectPosition(float ax, float ay, float az) {
     minDist = dPraBaixo;
     pos = "pra baixo";
   }
-  // if (dSentado < minDist) {
-  //   minDist = dSentado;
-  //   pos = "sentado";
-  // }
   
   // Verifica se há uma posição secundária próxima para detectar diagonais (sem repetir a principal)
   String posSecundaria = "";
@@ -86,10 +91,8 @@ String detectPosition(float ax, float ay, float az) {
   if (pos != "pra direita" && fabs(dPraDireita - minDist) < tol) posSecundaria = "pra direita";
   if (pos != "pra esquerda" && fabs(dPraEsquerda - minDist) < tol) posSecundaria = "pra esquerda";
   if (pos != "pra baixo" && fabs(dPraBaixo - minDist) < tol) posSecundaria = "pra baixo";
-  /////////////////////////////////////////////////////////////////////////////////////////////////
 
-  // Retorna a posição primária e, se houver, a secundária. 
-  // Também ordena os nomes para garantir consistência na saída
+  // Retorna a posição primária e, se houver, a secundária (ordenadas para consistência)
   if (!posSecundaria.isEmpty()) {
     if (pos > posSecundaria) {
       return posSecundaria + " / " + pos;
@@ -99,15 +102,56 @@ String detectPosition(float ax, float ay, float az) {
   return pos;
 }
 
+// --- Função de callback do MQTT ---
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Mensagem recebida no tópico: ");
+  Serial.println(topic);
 
-// Função para reconectar ao broker MQTT, se necessário
+  // Converte o payload para string
+  char message[256];
+  if (length >= sizeof(message)) length = sizeof(message) - 1;
+  memcpy(message, payload, length);
+  message[length] = '\0';
+  
+  Serial.print("Payload: ");
+  Serial.println(message);
+
+  // Faz o parse do JSON recebido
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, message);
+  if (error) {
+    Serial.print("Falha ao parsear JSON: ");
+    Serial.println(error.c_str());
+    return;
+  }
+  
+  // Obtém o tempo na posição enviado pelo outro dispositivo (em segundos)
+  unsigned long remoteTime = doc["time_in_position"];
+  
+  // Se o tempo exceder o limite, ativa o alarme remoto
+  if (remoteTime >= alarmDuration / 1000) {
+    remoteAlarmActive = true;
+    Serial.println("Alarme remoto ativo!");
+  } else {
+    remoteAlarmActive = false;
+  }
+  
+  // Atualiza o tempo da última mensagem recebida do dispositivo remoto
+  lastRemoteMessageTime = millis();
+}
+
+// --- Função para reconectar ao broker MQTT ---
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Conectando ao MQTT...");
-    String clientId = "ESP32_Braco-";
+    String clientId = "ESP32_";
     clientId += String(random(0xffff), HEX);
     if (client.connect(clientId.c_str(), mqtt_username, mqtt_password)) {
       Serial.println(" conectado!");
+      // Ao conectar, inscreve-se no tópico do dispositivo remoto
+      client.subscribe(MQTT_SUBSCRIBE_TOPIC);
+      Serial.print("Inscrito no tópico remoto: ");
+      Serial.println(MQTT_SUBSCRIBE_TOPIC);
     } else {
       Serial.print(" falhou, rc=");
       Serial.print(client.state());
@@ -129,8 +173,6 @@ void setup() {
     Serial.println("Falha ao inicializar o MPU6050!");
     while (1) delay(10);
   }
-
-  // Não utilizamos calibração dinâmica; usaremos os parâmetros fixos.
   Serial.println("Utilizando parâmetros fixos para detecção de posição.");
 
   // Configuração dos pinos de saída
@@ -152,6 +194,8 @@ void setup() {
   // Configura o cliente seguro MQTT para aceitar certificados não verificados (para testes)
   espClient.setInsecure();
   client.setServer(mqtt_server, mqtt_port);
+  // Define o callback para mensagens recebidas
+  client.setCallback(mqttCallback);
 
   // Inicializa a contagem de tempo na posição
   positionStartTime = millis();
@@ -163,6 +207,11 @@ void loop() {
   }
   client.loop();
 
+  // Verifica se passou tempo demais sem receber dados do dispositivo remoto
+  if (millis() - lastRemoteMessageTime > remoteTimeout) {
+    remoteAlarmActive = false;
+  }
+
   // Leitura dos sensores do MPU6050
   sensors_event_t accel, gyro, temp;
   mpu.getEvent(&accel, &gyro, &temp);
@@ -172,7 +221,7 @@ void loop() {
   float ay = accel.acceleration.y;
   float az = accel.acceleration.z;
   
-  // Debug: imprime os valores do acelerômetro
+  // Debug: imprime os valores do acelerômetro e giroscópio
   Serial.print("Acelerometro -> X: ");
   Serial.print(ax, 2);
   Serial.print("  Y: ");
@@ -180,7 +229,6 @@ void loop() {
   Serial.print("  Z: ");
   Serial.println(az, 2);
   
-  // Debug: imprime os valores do giroscópio
   Serial.print("Giroscopio -> X: ");
   Serial.print(gyro.gyro.x, 2);
   Serial.print("  Y: ");
@@ -191,7 +239,7 @@ void loop() {
   // Detecta a posição com base nos parâmetros fixos
   String newPosition = detectPosition(ax, ay, az);
 
-  // Se a posição mudar, reinicia a contagem
+  // Se a posição mudar, reinicia a contagem e desliga eventuais alarmes
   if (newPosition != currentPosition) {
     currentPosition = newPosition;
     positionStartTime = millis();
@@ -208,8 +256,10 @@ void loop() {
   Serial.print(timeInPosition / 1000);
   Serial.println(" s");
 
-  // Aciona alarme piscante se o tempo na posição ultrapassar o limite
-  if (currentPosition != "indefinido" && timeInPosition >= alarmDuration) {
+  // Condição para acionar o alarme:
+  // Se o tempo local exceder o limite OU se o outro dispositivo sinalizou alarme.
+  bool localAlarmActive = (currentPosition != "indefinido" && timeInPosition >= alarmDuration);
+  if (localAlarmActive || remoteAlarmActive) {
     if (millis() - lastBlinkTime >= blinkInterval) {
       blinkState = !blinkState; // alterna o estado
       lastBlinkTime = millis();
@@ -222,14 +272,14 @@ void loop() {
     digitalWrite(BUZZER_PIN, LOW);
   }
 
-  // Monta a mensagem JSON utilizando um buffer fixo
+  // Monta a mensagem JSON para publicação, incluindo a posição, tempo e leituras dos sensores.
   char payload[256];
   snprintf(payload, sizeof(payload),
            "{\"position\":\"%s\",\"time_in_position\":%lu,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f}",
            currentPosition.c_str(), timeInPosition / 1000, ax, ay, az);
 
-  // Publica os dados no MQTT
-  client.publish(MQTT_TOPIC, payload);
+  // Publica os dados no tópico deste dispositivo
+  client.publish(MQTT_PUBLISH_TOPIC, payload);
 
   delay(1000); // Atualiza a cada 1 segundo
 }
