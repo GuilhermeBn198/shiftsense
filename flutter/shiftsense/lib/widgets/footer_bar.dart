@@ -14,22 +14,25 @@ class FooterBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BottomAppBar(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          IconButton(
-            icon: Icon(Icons.home),
-            onPressed: onHomePressed,
-          ),
-          IconButton(
-            icon: Icon(Icons.delete),
-            onPressed: onDeletePressed,
-          ),
-          IconButton(
-            icon: Icon(Icons.add),
-            onPressed: onAddPressed,
-          ),
-        ],
+      child: Container(
+        height: 60,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            IconButton(
+              icon: Icon(Icons.home, size: 30),
+              onPressed: onHomePressed,
+            ),
+            IconButton(
+              icon: Icon(Icons.delete, size: 30),
+              onPressed: onDeletePressed,
+            ),
+            IconButton(
+              icon: Icon(Icons.add, size: 30),
+              onPressed: onAddPressed,
+            ),
+          ],
+        ),
       ),
     );
   }

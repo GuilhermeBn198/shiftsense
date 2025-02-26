@@ -11,7 +11,10 @@ class HeaderBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return AppBar(
-      title: showLogo ? Image.asset('assets/logo.png', height: 40) : SizedBox(),
+      automaticallyImplyLeading: false, // Remove o botão de voltar padrão
+      title: showLogo 
+          ? Image.asset('assets/logo.png', height: 40) 
+          : SizedBox(),
       centerTitle: true,
     );
   }
