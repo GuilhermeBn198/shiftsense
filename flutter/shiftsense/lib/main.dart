@@ -17,7 +17,16 @@ class MyApp extends StatelessWidget {
         '/add': (context) => AddPulseirasPage(),
       },
       theme: ThemeData(
-        primarySwatch: Colors.blue,
+        primaryColor: Color(0xFF145e52),
+        colorScheme: ColorScheme.light(
+          secondary: Color(0xFF7bc5a2),
+          surface: Color(0xFFade0c1),
+        ),
+        scaffoldBackgroundColor: Color(0xFFade0c1),
+        appBarTheme: AppBarTheme(
+          color: Color(0xFF145e52),
+          iconTheme: IconThemeData(color: Colors.white),
+        ),
       ),
     );
   }
