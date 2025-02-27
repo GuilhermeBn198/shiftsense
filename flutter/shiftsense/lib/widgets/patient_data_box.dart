@@ -74,28 +74,18 @@ class PatientDataBox extends StatelessWidget {
     );
   }
 
-  IconData _getDirectionIcon(String direction) {
-    switch (direction.toLowerCase()) {
-      case 'up':
-        return Icons.arrow_upward;
-      case 'down':
-        return Icons.arrow_downward;
-      case 'left':
-        return Icons.arrow_back;
-      case 'right':
-        return Icons.arrow_forward;
-      case 'upleft':
-        return Icons.arrow_back;
-      case 'upright':
-        return Icons.arrow_forward;
-      case 'downleft':
-        return Icons.arrow_back;
-      case 'downright':
-        return Icons.arrow_forward;
-      default:
-        return Icons.help_outline;
-    }
-  }
+IconData _getDirectionIcon(String direction) {
+  final dir = direction.toLowerCase();
+  if (dir.contains('pra cima')) return Icons.arrow_upward;
+  if (dir.contains('pra baixo')) return Icons.arrow_downward;
+  if (dir.contains('pra esquerda')) return Icons.arrow_back;
+  if (dir.contains('pra direita')) return Icons.arrow_forward;
+  if (dir.contains('pra cima / pra esquerda')) return Icons.arrow_back;
+  if (dir.contains('pra cima / pra direita')) return Icons.arrow_forward;
+  if (dir.contains('pra baixo / pra direita')) return Icons.arrow_back;
+  if (dir.contains('pra baixo / pra esquerda')) return Icons.arrow_forward;
+  return Icons.help_outline; //nao identificou posicao
+}
 
   @override
   Widget build(BuildContext context) {

@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
 import '../services/mqtt_service.dart';
+import '../services/patient_repository.dart';
 import '../widgets/patient_data_box.dart';
 import '../widgets/header_bar.dart';
 import '../widgets/footer_bar.dart';
@@ -12,18 +15,42 @@ class LandingPage extends StatefulWidget {
 }
 
 class _LandingPageState extends State<LandingPage> {
-  final List<PatientData> _patients = [];
+  final PatientRepository _repository = PatientRepository();
+  List<PatientData> _patients = [];
   late MQTTService _mqttService;
   bool _showDelete = false;
+  bool _mqttConnected = false;
+  bool _loading = true;
+  String? _errorMessage;
   final Map<String, List<String>> _subscriptions = {};
 
   @override
   void initState() {
     super.initState();
-    _initializeMQTT();
+    _initializeServices();
   }
 
-  void _initializeMQTT() {
+  Future<void> _initializeServices() async {
+    try {
+      await _repository.init();
+      await _loadPatients();
+      await _initializeMQTT();
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Erro ao inicializar: $e';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadPatients() async {
+    final patients = await _repository.getAllPatients();
+    setState(() {
+      _patients = patients;
+    });
+  }
+
+  Future<void> _initializeMQTT() async {
     _mqttService = MQTTService(
       server: '07356c1b41e34d65a6152a202151c24d.s1.eu.hivemq.cloud',
       clientId: 'flutter_client_${DateTime.now().millisecondsSinceEpoch}',
@@ -32,46 +59,83 @@ class _LandingPageState extends State<LandingPage> {
       port: 8883,
       onMessageReceived: _handleMQTTMessage,
     );
-    _mqttService.connect();
+
+    try {
+      await _mqttService.connect();
+      setState(() {
+        _mqttConnected = true;
+        _loading = false;
+      });
+
+      // Inscreve nos tópicos dos pacientes existentes
+      for (final patient in _patients) {
+        _subscribeToPatientTopics(patient.id);
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Erro na conexão MQTT: $e';
+        _loading = false;
+      });
+    }
   }
 
-  void _handleMQTTMessage(String topic, String message) {
-    setState(() {
+  void _handleMQTTMessage(String topic, String message) async {
+    try {
+      final jsonData = jsonDecode(message);
       final parts = topic.split('/');
       if (parts.length != 2) return;
 
       final patientId = parts[0];
       final limb = parts[1];
 
+      // Procura o paciente ou cria um novo
+      PatientData existingPatient;
       try {
-        final jsonData = jsonDecode(message);
-        final direction = jsonData['position'];
-        final timeInPosition = jsonData['time_in_position'];
-
-        // Procura o paciente ou cria um novo se não existir
-        final existingPatient = _patients.firstWhere(
-          (p) => p.id == patientId,
-          orElse: () {
-            final newPatient = PatientData(
-              name: 'Paciente $patientId',
-              id: patientId,
-              sensorData: {},
-            );
-            _patients.add(newPatient);
-            _subscribeToPatientTopics(patientId);
-            return newPatient;
+        existingPatient = _patients.firstWhere((p) => p.id == patientId);
+      } catch (e) {
+        existingPatient = PatientData(
+          name: 'Paciente $patientId',
+          id: patientId,
+          sensorData: {
+            'braco': SensorInfo(
+              direction: '-',
+              duration: '0s',
+              icon: Icons.accessibility,
+            ),
+            'perna': SensorInfo(
+              direction: '-',
+              duration: '0s',
+              icon: Icons.directions_walk,
+            ),
           },
         );
-
-        existingPatient.sensorData[limb] = SensorInfo(
-          direction: direction,
-          duration: '${timeInPosition}s',
-          icon: limb == 'braco' ? Icons.accessibility : Icons.directions_walk,
-        );
-      } catch (e) {
-        print('Erro ao decodificar JSON: $e');
+        _patients.add(existingPatient);
+        _subscribeToPatientTopics(patientId);
       }
-    });
+
+      // Atualiza os dados do sensor
+      final updatedPatient = PatientData(
+        name: existingPatient.name,
+        id: existingPatient.id,
+        sensorData: Map<String, SensorInfo>.from(existingPatient.sensorData),
+      );
+
+      updatedPatient.sensorData[limb] = SensorInfo(
+        direction: jsonData['position'],
+        duration: '${jsonData['time_in_position']}s',
+        icon: limb == 'braco' 
+            ? Icons.accessibility 
+            : Icons.directions_walk,
+      );
+
+      await _repository.savePatient(updatedPatient);
+
+      setState(() {
+        _patients = _patients.map((p) => p.id == patientId ? updatedPatient : p).toList();
+      });
+    } catch (e) {
+      print('Erro ao processar mensagem: $e');
+    }
   }
 
   void _subscribeToPatientTopics(String patientId) {
@@ -88,21 +152,13 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   void _toggleDeleteMode() {
-    setState(() {
-      _showDelete = !_showDelete;
-    });
+    setState(() => _showDelete = !_showDelete);
   }
 
-  void _deletePatient(int index) {
+  void _deletePatient(int index) async {
     final patientId = _patients[index].id;
-    _subscriptions[patientId]?.forEach((topic) {
-      _mqttService.unsubscribe(topic);
-    });
-    _subscriptions.remove(patientId);
-
-    setState(() {
-      _patients.removeAt(index);
-    });
+    await _repository.deletePatient(patientId);
+    setState(() => _patients.removeAt(index));
   }
 
   @override
@@ -113,12 +169,40 @@ class _LandingPageState extends State<LandingPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFade0c1),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 20),
+              Text('Conectando ao MQTT...'),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_errorMessage != null) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFade0c1),
+        body: Center(
+          child: Text(
+            _errorMessage!,
+            style: TextStyle(color: Colors.red),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: HeaderBar(showLogo: true),
-      backgroundColor: Color(0xFFade0c1),
+      backgroundColor: const Color(0xFFade0c1),
       body: GridView.builder(
-        padding: EdgeInsets.all(16),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        padding: const EdgeInsets.all(16),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
           mainAxisSpacing: 12,
           crossAxisSpacing: 12,
@@ -138,12 +222,12 @@ class _LandingPageState extends State<LandingPage> {
                 child: GestureDetector(
                   onTap: () => _deletePatient(index),
                   child: Container(
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       color: Colors.red,
                       shape: BoxShape.circle,
                     ),
-                    padding: EdgeInsets.all(4),
-                    child: Icon(
+                    padding: const EdgeInsets.all(4),
+                    child: const Icon(
                       Icons.close,
                       color: Colors.white,
                       size: 20,

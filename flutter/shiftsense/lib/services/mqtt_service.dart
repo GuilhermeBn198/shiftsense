@@ -1,47 +1,53 @@
+import 'dart:io';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
 class MQTTService {
-  final MqttServerClient client;
+  late MqttServerClient client;
   final Function(String topic, String message) onMessageReceived;
+  final String server;
+  final String clientId;
   final String username;
   final String password;
+  final int port;
 
   MQTTService({
     required this.onMessageReceived,
-    required String server,
-    required String clientId,
-    this.username = '',
-    this.password = '',
-    int port = 1883,
-  }) : client = MqttServerClient.withPort(server, clientId, port);
+    required this.server,
+    required this.clientId,
+    required this.username,
+    required this.password,
+    required this.port,
+  });
 
   Future<void> connect() async {
+    client = MqttServerClient.withPort(server, clientId, port);
     client.logging(on: true);
     client.keepAlivePeriod = 30;
-    // Se a porta for 8883, habilitamos a conexão segura
-    if (client.port == 8883) {
-      client.secure = true;
-    }
-    client.setProtocolV311();
+    client.secure = true;
+    client.securityContext = SecurityContext.defaultContext;
 
+    // Corrigindo a mensagem de conexão
     final connMessage = MqttConnectMessage()
-        .withClientIdentifier(client.clientIdentifier)
-        .startClean();
+        .authenticateAs(username, password)
+        .withClientIdentifier(clientId)
+        .startClean(); // Removido withWillTopic não essencial
+
+    // Configuração adicional para evitar nulls
     client.connectionMessage = connMessage;
+    client.autoReconnect = true;
 
     try {
-      await client.connect(username, password);
-      // Se desejar, pode remover a inscrição global em '#' e gerenciar tópicos individualmente
-      // client.subscribe('#', MqttQos.atMostOnce);
+      await client.connect();
       client.updates!.listen((List<MqttReceivedMessage<MqttMessage>> c) {
         final recvMsg = c[0].payload as MqttPublishMessage;
         final payload = String.fromCharCodes(recvMsg.payload.message);
         onMessageReceived(c[0].topic, payload);
       });
     } catch (e) {
-      print('Exception: $e');
+      print('Erro de conexão: $e');
       client.disconnect();
+      rethrow;
     }
   }
 

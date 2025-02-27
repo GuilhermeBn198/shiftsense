@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../services/mqtt_service.dart';
+import '../services/patient_repository.dart';
 import '../widgets/header_bar.dart';
 import '../widgets/footer_bar.dart';
 import '../widgets/patient_data_box.dart';
 import '../models/pulseira_model.dart';
-import '../services/mqtt_service.dart';
 
 class AddPulseirasPage extends StatefulWidget {
   @override
@@ -17,11 +18,17 @@ class _AddPulseirasPageState extends State<AddPulseirasPage> {
   late MQTTService _mqttService;
   SensorInfo? _armData;
   SensorInfo? _legData;
+  final PatientRepository _repository = PatientRepository();
+  bool _isSubscribed = false;
+  bool _mqttConnected = false;
+  bool _connecting = true; // Flag para indicar que está tentando conectar
+  String? _connectionError;
 
   @override
   void initState() {
     super.initState();
     _initializeMQTT();
+    _repository.init(); // Inicializa a box do Hive
   }
 
   void _initializeMQTT() {
@@ -33,20 +40,40 @@ class _AddPulseirasPageState extends State<AddPulseirasPage> {
       port: 8883,
       onMessageReceived: _handleTestData,
     );
-    _mqttService.connect();
+
+    // Inicia a conexão e define um timeout de 30 segundos
+    _mqttService.connect().then((_) {
+      setState(() {
+        _mqttConnected = true;
+        _connecting = false;
+      });
+    }).timeout(Duration(seconds: 30), onTimeout: () {
+      setState(() {
+        _connecting = false;
+        _connectionError = 'Tempo de conexão esgotado (30s). Verifique sua rede e configurações.';
+      });
+      _mqttService.disconnect();
+    }).catchError((e) {
+      setState(() {
+        _connecting = false;
+        _connectionError = 'Erro na conexão MQTT: $e';
+      });
+    });
   }
 
   void _handleTestData(String topic, String message) {
-    setState(() {
-      try {
-        final jsonData = jsonDecode(message);
-        final direction = jsonData['position'];
-        final timeInPosition = jsonData['time_in_position'];
+    try {
+      final jsonData = jsonDecode(message);
+      final direction = jsonData['position']?.toString() ?? '-';
+      final duration = jsonData['time_in_position']?.toString() ?? '0';
 
+      setState(() {
         final sensorInfo = SensorInfo(
           direction: direction,
-          duration: '${timeInPosition}s',
-          icon: topic.contains('braco') ? Icons.accessibility : Icons.directions_walk,
+          duration: '${duration}s',
+          icon: topic.contains('braco')
+              ? Icons.accessibility
+              : Icons.directions_walk,
         );
 
         if (topic.contains('braco')) {
@@ -54,44 +81,69 @@ class _AddPulseirasPageState extends State<AddPulseirasPage> {
         } else {
           _legData = sensorInfo;
         }
-      } catch (e) {
-        print('Erro ao decodificar JSON: $e');
-      }
-    });
+      });
+    } catch (e) {
+      print('Erro ao processar mensagem: $e');
+    }
   }
 
   void _sendTestSubscription() {
     final patientId = _patientIdController.text;
-    if (patientId.isNotEmpty) {
+    if (patientId.isNotEmpty && !_isSubscribed) {
+      if (!_mqttConnected) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('MQTT não está conectado. Aguarde...')),
+        );
+        return;
+      }
       _mqttService.subscribe('$patientId/braco');
       _mqttService.subscribe('$patientId/perna');
+      setState(() => _isSubscribed = true);
     }
   }
 
-  void _confirmAddition() {
+  void _confirmAddition() async {
+    if (_nameController.text.isEmpty || _patientIdController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Preencha todos os campos!')),
+      );
+      return;
+    }
+
     final newPatient = PatientData(
       name: _nameController.text,
       id: _patientIdController.text,
       sensorData: {
-        'braco': _armData ?? SensorInfo(
-          direction: '-', 
-          duration: '0s',
-          icon: Icons.accessibility,
-        ),
-        'perna': _legData ?? SensorInfo(
-          direction: '-',
-          duration: '0s',
-          icon: Icons.directions_walk,
-        ),
+        'braco': _armData ??
+            SensorInfo(
+              direction: '-',
+              duration: '0s',
+              icon: Icons.accessibility,
+            ),
+        'perna': _legData ??
+            SensorInfo(
+              direction: '-',
+              duration: '0s',
+              icon: Icons.directions_walk,
+            ),
       },
     );
-    
-    Navigator.pop(context, newPatient);
+
+    try {
+      await _repository.savePatient(newPatient);
+      Navigator.pop(context, newPatient);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao salvar paciente: $e')),
+      );
+    }
   }
 
   @override
   void dispose() {
     _mqttService.disconnect();
+    _nameController.dispose();
+    _patientIdController.dispose();
     super.dispose();
   }
 
@@ -99,38 +151,44 @@ class _AddPulseirasPageState extends State<AddPulseirasPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: HeaderBar(showLogo: true),
-      backgroundColor: Color(0xFFade0c1),
-      body: Padding(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          children: [
-            _buildInputForm(),
-            SizedBox(height: 20),
-            Expanded(
-              child: PatientDataBox(
-                patient: PatientData(
-                  name: _nameController.text,
-                  id: _patientIdController.text,
-                  sensorData: {
-                    'braco': _armData ?? SensorInfo(
-                      direction: '-', 
-                      duration: '0s',
-                      icon: Icons.accessibility,
-                    ),
-                    'perna': _legData ?? SensorInfo(
-                      direction: '-',
-                      duration: '0s',
-                      icon: Icons.directions_walk,
-                    ),
-                  },
+      backgroundColor: const Color(0xFFade0c1),
+      body: _connecting
+          ? Center(child: CircularProgressIndicator())
+          : _connectionError != null
+              ? Center(child: Text(_connectionError!))
+              : Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      _buildInputForm(),
+                      const SizedBox(height: 20),
+                      Expanded(
+                        child: PatientDataBox(
+                          patient: PatientData(
+                            name: _nameController.text,
+                            id: _patientIdController.text,
+                            sensorData: {
+                              'braco': _armData ??
+                                  SensorInfo(
+                                    direction: '-',
+                                    duration: '0s',
+                                    icon: Icons.accessibility,
+                                  ),
+                              'perna': _legData ??
+                                  SensorInfo(
+                                    direction: '-',
+                                    duration: '0s',
+                                    icon: Icons.directions_walk,
+                                  ),
+                            },
+                          ),
+                          scale: 1.4,
+                          showLabels: false,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                scale: 1.4,
-                showLabels: false,
-              ),
-            ),
-          ],
-        ),
-      ),
       bottomNavigationBar: FooterBar(
         onHomePressed: () => Navigator.pop(context),
         onDeletePressed: () => Navigator.pop(context),
@@ -142,35 +200,41 @@ class _AddPulseirasPageState extends State<AddPulseirasPage> {
   Widget _buildInputForm() {
     return Container(
       decoration: BoxDecoration(
-        color: Color(0xFF7bc5a2),
+        color: const Color(0xFF7bc5a2),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Color(0xFF145e52), width: 2),
+        border: Border.all(color: const Color(0xFF145e52), width: 2),
       ),
-      padding: EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
       child: Column(
         children: [
           TextField(
             controller: _nameController,
-            decoration: InputDecoration(
+            decoration: const InputDecoration(
               labelText: 'Nome do Paciente',
               labelStyle: TextStyle(color: Color(0xFF145e52)),
+              border: OutlineInputBorder(),
             ),
           ),
-          SizedBox(height: 12),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
                 child: TextField(
                   controller: _patientIdController,
-                  decoration: InputDecoration(
+                  decoration: const InputDecoration(
                     labelText: 'ID da Pulseira',
                     labelStyle: TextStyle(color: Color(0xFF145e52)),
+                    border: OutlineInputBorder(),
                   ),
                 ),
               ),
+              const SizedBox(width: 10),
               IconButton(
-                icon: Icon(Icons.send, color: Color(0xFF145e52)),
-                onPressed: _sendTestSubscription,
+                icon: Icon(
+                  Icons.send,
+                  color: _isSubscribed ? Colors.grey : const Color(0xFF145e52),
+                ),
+                onPressed: _isSubscribed ? null : _sendTestSubscription,
               ),
             ],
           ),

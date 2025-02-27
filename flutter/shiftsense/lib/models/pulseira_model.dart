@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class PatientData {
   final String name;
   final String id;
-  final Map<String, dynamic> sensorData;
+  final Map<String, SensorInfo> sensorData;
 
   PatientData({
     required this.name,
