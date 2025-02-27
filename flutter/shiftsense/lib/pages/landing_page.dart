@@ -1,5 +1,5 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:mqtt_client/mqtt_client.dart';
 import '../services/mqtt_service.dart';
 import '../widgets/patient_data_box.dart';
 import '../widgets/header_bar.dart';
@@ -25,8 +25,11 @@ class _LandingPageState extends State<LandingPage> {
 
   void _initializeMQTT() {
     _mqttService = MQTTService(
-      server: 'broker.hivemq.com',
+      server: '07356c1b41e34d65a6152a202151c24d.s1.eu.hivemq.cloud',
       clientId: 'flutter_client_${DateTime.now().millisecondsSinceEpoch}',
+      username: 'hivemq.webclient.1740079881529',
+      password: 'h45de%Pb.6O8aBQo>JC!',
+      port: 8883,
       onMessageReceived: _handleMQTTMessage,
     );
     _mqttService.connect();
@@ -39,26 +42,34 @@ class _LandingPageState extends State<LandingPage> {
 
       final patientId = parts[0];
       final limb = parts[1];
-      final data = message.split(',');
 
-      final existingPatient = _patients.firstWhere(
-        (p) => p.id == patientId,
-        orElse: () => PatientData(
-          name: 'Paciente $patientId',
-          id: patientId,
-          sensorData: {},
-        ),
-      );
+      try {
+        final jsonData = jsonDecode(message);
+        final direction = jsonData['position'];
+        final timeInPosition = jsonData['time_in_position'];
 
-      existingPatient.sensorData[limb] = SensorInfo(
-        direction: data[0],
-        duration: '${data[1]}s',
-        icon: limb == 'braco' ? Icons.accessibility : Icons.directions_walk,
-      );
+        // Procura o paciente ou cria um novo se não existir
+        final existingPatient = _patients.firstWhere(
+          (p) => p.id == patientId,
+          orElse: () {
+            final newPatient = PatientData(
+              name: 'Paciente $patientId',
+              id: patientId,
+              sensorData: {},
+            );
+            _patients.add(newPatient);
+            _subscribeToPatientTopics(patientId);
+            return newPatient;
+          },
+        );
 
-      if (!_patients.contains(existingPatient)) {
-        _patients.add(existingPatient);
-        _subscribeToPatientTopics(patientId);
+        existingPatient.sensorData[limb] = SensorInfo(
+          direction: direction,
+          duration: '${timeInPosition}s',
+          icon: limb == 'braco' ? Icons.accessibility : Icons.directions_walk,
+        );
+      } catch (e) {
+        print('Erro ao decodificar JSON: $e');
       }
     });
   }
@@ -88,7 +99,7 @@ class _LandingPageState extends State<LandingPage> {
       _mqttService.unsubscribe(topic);
     });
     _subscriptions.remove(patientId);
-    
+
     setState(() {
       _patients.removeAt(index);
     });
@@ -104,7 +115,7 @@ class _LandingPageState extends State<LandingPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: HeaderBar(showLogo: true),
-      backgroundColor: Color(0xFFade0c1), // Cor de fundo externa
+      backgroundColor: Color(0xFFade0c1),
       body: GridView.builder(
         padding: EdgeInsets.all(16),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(

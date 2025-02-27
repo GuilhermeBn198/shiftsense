@@ -9,7 +9,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Pulseira App',
+      title: 'ShiftSense App',
       initialRoute: '/',
       routes: {
         '/': (context) => HomePage(),
