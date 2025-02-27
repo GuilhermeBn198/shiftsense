@@ -60,7 +60,7 @@ const unsigned long remoteTimeout = 3000; // Se não receber mensagem em 3s, des
 // --- Função para detectar a posição do paciente com base nos valores do acelerômetro ---
 String detectPosition(float ax, float ay, float az) {
   // Define a tolerância (ajuste conforme necessário)
-  float tol = 2.0;
+  float tol = 3.0;
   
   // Calcula a distância Euclidiana entre a leitura atual e cada referência:
   float dPraCima    = sqrt(pow(ax - 10.0, 2) + pow(ay - (-0.3), 2) + pow(az - (-0.5), 2));
