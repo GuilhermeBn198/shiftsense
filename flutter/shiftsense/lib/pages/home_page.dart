@@ -18,7 +18,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _startTimer() {
-    _timer = Timer(Duration(seconds: 10), () {
+    _timer = Timer(Duration(seconds: 5), () {
       Navigator.pushReplacementNamed(context, '/landing');
     });
   }
@@ -38,7 +38,7 @@ class _HomePageState extends State<HomePage> {
             _timer.cancel();
             Navigator.pushReplacementNamed(context, '/landing');
           },
-          child: Image.asset('assets/logo.png', width: 150), // Apenas a logo
+          child: Image.asset('assets/logoenome.png', width: 150), // Apenas a logo
         ),
       ),
     );
