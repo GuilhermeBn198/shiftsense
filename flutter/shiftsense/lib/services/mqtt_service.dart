@@ -41,7 +41,8 @@ class MQTTService {
       await client.connect();
       client.updates!.listen((List<MqttReceivedMessage<MqttMessage>> c) {
         final recvMsg = c[0].payload as MqttPublishMessage;
-        final payload = String.fromCharCodes(recvMsg.payload.message);
+        final payload = MqttPublishPayload.bytesToStringAsString(recvMsg.payload.message);
+        print("Payload recebido: $payload");
         onMessageReceived(c[0].topic, payload);
       });
     } catch (e) {
