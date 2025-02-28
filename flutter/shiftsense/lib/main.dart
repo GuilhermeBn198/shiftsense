@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'models/adapters.dart'; 
-import 'models/pulseira_model.dart';
+import 'models/adapters.dart';
 import 'pages/home_page.dart';
 import 'pages/landing_page.dart';
 import 'pages/add_pulseiras_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Inicializa o Hive
   await Hive.initFlutter();
   Hive.registerAdapter(PatientDataAdapter());
   Hive.registerAdapter(SensorInfoAdapter());
